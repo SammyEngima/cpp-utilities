@@ -31,7 +31,6 @@ set(HEADER_FILES
     io/misc.h
     math/math.h
     misc/memory.h
-    misc/random.h
     misc/traits.h
     tests/testutils.h
     tests/cppunit.h
@@ -57,7 +56,6 @@ set(SRC_FILES
     io/nativefilestream.cpp
     io/misc.cpp
     math/math.cpp
-    misc/random.cpp
     tests/testutils.cpp
 )
 
