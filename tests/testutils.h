@@ -41,7 +41,6 @@ private:
     void readFallbackTestfilePathFromSrcRef();
 
     ApplicationUtilities::ArgumentParser m_parser;
-    ApplicationUtilities::HelpArgument m_helpArg;
     ApplicationUtilities::Argument m_testFilesPathArg;
     ApplicationUtilities::Argument m_applicationPathArg;
     ApplicationUtilities::Argument m_workingDirArg;

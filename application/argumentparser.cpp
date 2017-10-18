@@ -338,12 +338,6 @@ const char *applicationUrl = nullptr;
 /// \brief Specifies the dependency versions the application was linked against (used by ArgumentParser::printHelp()).
 std::initializer_list<const char *> dependencyVersions;
 
-/*!
- * \brief Specifies a function quit the application.
- * \remarks Currently only used after printing Bash completion. Default is std::exit().
- */
-void (*exitFunction)(int) = &exit;
-
 /// \cond
 
 inline bool notEmpty(const char *str)
@@ -636,7 +630,12 @@ ArgumentParser::ArgumentParser()
     , m_executable(nullptr)
     , m_unknownArgBehavior(UnknownArgumentBehavior::Fail)
     , m_defaultArg(nullptr)
+    , m_helpArg(*this)
+    , m_noColorArg()
+    , m_exitFunction(exit)
 {
+    m_helpArg.m_isMainArg = true;
+    m_noColorArg.m_isMainArg = true;
 }
 
 /*!
@@ -650,28 +649,34 @@ ArgumentParser::ArgumentParser()
  */
 void ArgumentParser::setMainArguments(const ArgumentInitializerList &mainArguments)
 {
-    if (mainArguments.size()) {
-        for (Argument *arg : mainArguments) {
-            arg->m_isMainArg = true;
-        }
-        m_mainArgs.assign(mainArguments);
-        if (!m_defaultArg) {
-            if (!(*mainArguments.begin())->requiredValueCount()) {
-                bool subArgsRequired = false;
-                for (const Argument *subArg : (*mainArguments.begin())->subArguments()) {
-                    if (subArg->isRequired()) {
-                        subArgsRequired = true;
-                        break;
-                    }
-                }
-                if (!subArgsRequired) {
-                    m_defaultArg = *mainArguments.begin();
-                }
-            }
-        }
-    } else {
+    // clear arguments is mainArguments is empty
+    if (!mainArguments.size()) {
         m_mainArgs.clear();
+        return;
     }
+
+    // flag specified arguments as main arguments
+    for (Argument *arg : mainArguments) {
+        arg->m_isMainArg = true;
+    }
+
+    // assign specified arguments as well as the no-color and help arguments
+    m_mainArgs.reserve(mainArguments.size() + 2);
+    m_mainArgs.assign(mainArguments);
+    m_mainArgs.push_back(&m_noColorArg);
+    m_mainArgs.push_back(&m_helpArg);
+
+    // assign default argument if none present yet and the first argument doesn't expect values or
+    // has required sub arguments
+    if (m_defaultArg || (*mainArguments.begin())->requiredValueCount()) {
+        return;
+    }
+    for (const Argument *subArg : (*mainArguments.begin())->subArguments()) {
+        if (subArg->isRequired()) {
+            return;
+        }
+    }
+    m_defaultArg = *mainArguments.begin();
 }
 
 /*!
@@ -682,8 +687,13 @@ void ArgumentParser::setMainArguments(const ArgumentInitializerList &mainArgumen
  */
 void ArgumentParser::addMainArgument(Argument *argument)
 {
+    if (m_mainArgs.empty()) {
+        m_mainArgs.reserve(3);
+        m_mainArgs.push_back(&m_noColorArg);
+        m_mainArgs.push_back(&m_helpArg);
+    }
     argument->m_isMainArg = true;
-    m_mainArgs.push_back(argument);
+    m_mainArgs.insert(m_mainArgs.end() - 2, argument);
 }
 
 /*!
@@ -813,55 +823,66 @@ void ArgumentParser::parseArgsExt(int argc, const char *const *argv, ParseArgume
  */
 void ArgumentParser::readArgs(int argc, const char *const *argv)
 {
+    // verify whether the assigned argument definitions make sense
+    IF_DEBUG_BUILD(assert(!m_mainArgs.empty());)
     IF_DEBUG_BUILD(verifyArgs(m_mainArgs, std::vector<char>(), std::vector<const char *>());)
+
+    // check whether we have at least one argument
     m_actualArgc = 0;
-    if (argc) {
-        // the first argument is the executable name
-        m_executable = *argv;
-
-        // check for further arguments
-        if (--argc) {
-            // if the first argument (after executable name) is "--bash-completion-for", bash completion for the following arguments is requested
-            bool completionMode = !strcmp(*++argv, "--bash-completion-for");
-            unsigned int currentWordIndex;
-            if (completionMode) {
-                // the first argument after "--bash-completion-for" is the index of the current word
-                try {
-                    currentWordIndex = (--argc ? stringToNumber<unsigned int, string>(*(++argv)) : 0);
-                    if (argc) {
-                        ++argv, --argc;
-                    }
-                } catch (const ConversionException &) {
-                    currentWordIndex = static_cast<unsigned int>(argc - 1);
-                }
-            }
-
-            // read specified arguments
-            ArgumentReader reader(*this, argv,
-                argv + (completionMode ? min(static_cast<unsigned int>(argc), currentWordIndex + 1) : static_cast<unsigned int>(argc)),
-                completionMode);
-            try {
-                reader.read();
-                NoColorArgument::apply();
-            } catch (const Failure &) {
-                NoColorArgument::apply();
-                if (!completionMode) {
-                    throw;
-                }
-            }
-
-            if (completionMode) {
-                printBashCompletion(argc, argv, currentWordIndex, reader);
-                exitFunction(0); // prevent the applicaton to continue with the regular execution
-            }
-        } else {
-            // no arguments specified -> flag default argument as present if one is assigned
-            if (m_defaultArg) {
-                m_defaultArg->m_occurrences.emplace_back(0);
-            }
-        }
-    } else {
+    if (!argc) {
         m_executable = nullptr;
+        return;
+    }
+
+    // the first argument is the executable name
+    m_executable = *argv;
+
+    // check whether no further args are specified
+    // -> flag default argument as present in that case (if one is assigned)
+    if (!--argc) {
+        if (m_defaultArg) {
+            m_defaultArg->m_occurrences.emplace_back(0);
+        }
+        return;
+    }
+
+    // if the first argument (after executable name) is "--bash-completion-for", bash completion for the following arguments is requested
+    bool completionMode = !strcmp(*++argv, "--bash-completion-for");
+    unsigned int currentWordIndex;
+    if (completionMode) {
+        // the first argument after "--bash-completion-for" is the index of the current word
+        try {
+            currentWordIndex = (--argc ? stringToNumber<unsigned int, string>(*(++argv)) : 0);
+            if (argc) {
+                ++argv, --argc;
+            }
+        } catch (const ConversionException &) {
+            currentWordIndex = static_cast<unsigned int>(argc - 1);
+        }
+    }
+
+    // read specified arguments
+    ArgumentReader reader(*this, argv,
+        argv + (completionMode ? min(static_cast<unsigned int>(argc), currentWordIndex + 1) : static_cast<unsigned int>(argc)), completionMode);
+    try {
+        reader.read();
+        m_noColorArg.apply();
+    } catch (const Failure &) {
+        m_noColorArg.apply();
+        if (!completionMode) {
+            throw;
+        }
+    }
+
+    // print bash completion and exit if completion mode is enabled
+    if (!completionMode) {
+        return;
+    }
+    printBashCompletion(argc, argv, currentWordIndex, reader);
+
+    // prevent the applicaton to continue with the regular execution
+    if (m_exitFunction) {
+        m_exitFunction(0);
     }
 }
 
@@ -1413,6 +1434,7 @@ void ArgumentParser::invokeCallbacks(const ArgumentVector &args)
  * \class HelpArgument
  * \brief The HelpArgument class prints help information for an argument parser
  *        when present (--help, -h).
+ * \remarks This class is automatically instantiated when instantiating an ArgumentParser object.
  */
 
 /*!
@@ -1448,16 +1470,13 @@ HelpArgument::HelpArgument(ArgumentParser &parser)
  * configured at build time by setting the CMake variable ENABLE_ESCAPE_CODES_BY_DEFAULT.
  *
  * \remarks
- * - Only the first instance is considered for actually altering the value of EscapeCodes::enabled so it makes no sense to
- *   instantiate this class multiple times.
+ * - This class is automatically instantiated when instantiating an ArgumentParser object.
  * - It is ensure that EscapeCodes::enabled will be set before any callback functions are invoked and even in the error case (if
  *   the error doesn't prevent the argument from being detected). Hence this feature is implemented via NoColorArgument::apply()
  *   rather than the usual callback mechanism.
  *
  * \sa NoColorArgument::NoColorArgument(), EscapeCodes::enabled
  */
-
-NoColorArgument *NoColorArgument::s_instance = nullptr;
 
 /*!
  * \brief Constructs a new NoColorArgument argument.
@@ -1471,11 +1490,6 @@ NoColorArgument::NoColorArgument()
 #endif
 {
     setCombinable(true);
-
-    if (s_instance) {
-        return;
-    }
-    s_instance = this;
 
     // set the environmentvariable: note that this is not directly used and just assigned for printing help
     setEnvironmentVariable("ENABLE_ESCAPE_CODES");
@@ -1501,21 +1515,11 @@ NoColorArgument::NoColorArgument()
 }
 
 /*!
- * \brief Destroys the object.
+ * \brief Sets EscapeCodes::enabled according to the presense of the argument.
  */
-NoColorArgument::~NoColorArgument()
+void NoColorArgument::apply() const
 {
-    if (s_instance == this) {
-        s_instance = nullptr;
-    }
-}
-
-/*!
- * \brief Sets EscapeCodes::enabled according to the presense of the first instantiation of NoColorArgument.
- */
-void NoColorArgument::apply()
-{
-    if (NoColorArgument::s_instance && NoColorArgument::s_instance->isPresent()) {
+    if (isPresent()) {
 #ifdef CPP_UTILITIES_ESCAPE_CODES_ENABLED_BY_DEFAULT
         EscapeCodes::enabled = false;
 #else

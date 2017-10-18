@@ -45,8 +45,6 @@ CPP_UTILITIES_EXPORT extern std::initializer_list<const char *> dependencyVersio
     ::ApplicationUtilities::applicationUrl = APP_URL;                                                                                                \
     SET_DEPENDENCY_INFO
 
-CPP_UTILITIES_EXPORT extern void (*exitFunction)(int);
-
 class Argument;
 class ArgumentParser;
 class ArgumentReader;
@@ -269,6 +267,28 @@ private:
     const char *m_preDefinedCompletionValues;
 };
 
+class CPP_UTILITIES_EXPORT HelpArgument : public Argument {
+public:
+    HelpArgument(ArgumentParser &parser);
+};
+
+class CPP_UTILITIES_EXPORT OperationArgument : public Argument {
+public:
+    OperationArgument(const char *name, char abbreviation = '\0', const char *description = nullptr, const char *example = nullptr);
+};
+
+class CPP_UTILITIES_EXPORT ConfigValueArgument : public Argument {
+public:
+    ConfigValueArgument(const char *name, char abbreviation = '\0', const char *description = nullptr,
+        std::initializer_list<const char *> valueNames = std::initializer_list<const char *>());
+};
+
+class CPP_UTILITIES_EXPORT NoColorArgument : public Argument {
+public:
+    NoColorArgument();
+    void apply() const;
+};
+
 class CPP_UTILITIES_EXPORT ArgumentParser {
     friend ArgumentParserTests;
     friend ArgumentReader;
@@ -297,6 +317,11 @@ public:
     void checkConstraints();
     void invokeCallbacks();
     bool isUncombinableMainArgPresent() const;
+    void setExitFunction(std::function<void(int)> exitFunction);
+    const HelpArgument &helpArg() const;
+    HelpArgument &helpArg();
+    const NoColorArgument &noColorArg() const;
+    NoColorArgument &noColorArg();
 
 private:
     IF_DEBUG_BUILD(void verifyArgs(const ArgumentVector &args, std::vector<char> abbreviations, std::vector<const char *> names);)
@@ -309,6 +334,9 @@ private:
     const char *m_executable;
     UnknownArgumentBehavior m_unknownArgBehavior;
     Argument *m_defaultArg;
+    HelpArgument m_helpArg;
+    NoColorArgument m_noColorArg;
+    std::function<void(int)> m_exitFunction;
 };
 
 /*!
@@ -791,6 +819,24 @@ inline void Argument::reset()
     m_occurrences.clear();
 }
 
+inline OperationArgument::OperationArgument(const char *name, char abbreviation, const char *description, const char *example)
+    : Argument(name, abbreviation, description, example)
+{
+    setDenotesOperation(true);
+}
+
+/*!
+ * \brief Constructs a new ConfigValueArgument with the specified parameter. The initial value of requiredValueCount() is set to size of specified \a valueNames.
+ */
+inline ConfigValueArgument::ConfigValueArgument(
+    const char *name, char abbreviation, const char *description, std::initializer_list<const char *> valueNames)
+    : Argument(name, abbreviation, description)
+{
+    setCombinable(true);
+    setRequiredValueCount(valueNames.size());
+    setValueNames(valueNames);
+}
+
 /*!
  * \brief Returns information about all occurrences of the argument which have been detected when parsing.
  * \remarks The convenience methods isPresent(), values() and path() provide direct access to these information for a particular occurrence.
@@ -893,49 +939,46 @@ inline void ArgumentParser::invokeCallbacks()
     invokeCallbacks(m_mainArgs);
 }
 
-class CPP_UTILITIES_EXPORT HelpArgument : public Argument {
-public:
-    HelpArgument(ArgumentParser &parser);
-};
-
-class CPP_UTILITIES_EXPORT OperationArgument : public Argument {
-public:
-    OperationArgument(const char *name, char abbreviation = '\0', const char *description = nullptr, const char *example = nullptr);
-};
-
-inline OperationArgument::OperationArgument(const char *name, char abbreviation, const char *description, const char *example)
-    : Argument(name, abbreviation, description, example)
+/*!
+ * \brief Specifies a function quit the application.
+ * \remarks Currently only used after printing Bash completion. Default is std::exit().
+ */
+inline void ArgumentParser::setExitFunction(std::function<void(int)> exitFunction)
 {
-    setDenotesOperation(true);
+    m_exitFunction = exitFunction;
 }
-
-class CPP_UTILITIES_EXPORT ConfigValueArgument : public Argument {
-public:
-    ConfigValueArgument(const char *name, char abbreviation = '\0', const char *description = nullptr,
-        std::initializer_list<const char *> valueNames = std::initializer_list<const char *>());
-};
 
 /*!
- * \brief Constructs a new ConfigValueArgument with the specified parameter. The initial value of requiredValueCount() is set to size of specified \a valueNames.
+ * \brief Returns the `--help` argument (which is always implicitely added to the main arguments).
  */
-inline ConfigValueArgument::ConfigValueArgument(
-    const char *name, char abbreviation, const char *description, std::initializer_list<const char *> valueNames)
-    : Argument(name, abbreviation, description)
+inline const HelpArgument &ArgumentParser::helpArg() const
 {
-    setCombinable(true);
-    setRequiredValueCount(valueNames.size());
-    setValueNames(valueNames);
+    return m_helpArg;
 }
 
-class CPP_UTILITIES_EXPORT NoColorArgument : public Argument {
-public:
-    NoColorArgument();
-    ~NoColorArgument();
-    static void apply();
+/*!
+ * \brief Returns the `--help` argument (which is always implicitely added to the main arguments).
+ */
+inline HelpArgument &ArgumentParser::helpArg()
+{
+    return m_helpArg;
+}
 
-private:
-    static NoColorArgument *s_instance;
-};
+/*!
+ * \brief Returns the `--no-color` argument (which is always implicitely added to the main arguments).
+ */
+inline const NoColorArgument &ArgumentParser::noColorArg() const
+{
+    return m_noColorArg;
+}
+
+/*!
+ * \brief Returns the `--no-color` argument (which is always implicitely added to the main arguments).
+ */
+inline NoColorArgument &ArgumentParser::noColorArg()
+{
+    return m_noColorArg;
+}
 
 } // namespace ApplicationUtilities
 
